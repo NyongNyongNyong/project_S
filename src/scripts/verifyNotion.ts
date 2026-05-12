@@ -4,6 +4,12 @@ async function main() {
   const info = await verifyStorageAccess();
   console.log("Markdown storage verified.");
   console.log(`storiesDir: ${info.storiesDir}`);
+  console.log(`lorePlanetsDir: ${info.lorePlanetsDir}`);
+  console.log(
+    `loreDirs: ${Object.entries(info.loreDirs)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ")}`
+  );
 }
 
 main().catch((error) => {

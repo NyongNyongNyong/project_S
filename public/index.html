@@ -161,7 +161,7 @@
   <body>
     <main class="wrap">
       <h1>project_S 아이디어 입력</h1>
-      <p class="hint">모바일에서 생성·수정 후 저장하면 `content/stories`에 반영됩니다. 아래에서 저장본을 바로 읽을 수 있습니다.</p>
+      <p class="hint">시나리오·세계관 모두 <strong>생성 → 수정 요청 → Markdown 저장</strong> 순서가 같습니다. 세계관은 저장 위치를 고르거나 <strong>자동</strong>으로 두면 요청 문장을 보고 행성/세력/우주 공통 등으로 나눕니다.</p>
 
       <section class="card">
         <label for="docType">문서 타입</label>
@@ -169,6 +169,18 @@
           <option value="lore">세계관 (lore)</option>
           <option value="scenario">시나리오 (scenario)</option>
         </select>
+
+        <div id="loreSlotRow">
+          <label for="loreSlot">세계관 저장 위치</label>
+          <select id="loreSlot">
+            <option value="auto">자동 (요청 내용으로 판별)</option>
+            <option value="planets">행성 (content/lore/planets)</option>
+            <option value="universe">우주 공통 (content/lore/universe)</option>
+            <option value="factions">세력 (content/lore/factions)</option>
+            <option value="characters">인물 (content/lore/characters)</option>
+            <option value="locations">장소·거점 (content/lore/locations)</option>
+          </select>
+        </div>
 
         <label for="rewriteModeEnabled">
           <input id="rewriteModeEnabled" type="checkbox" />
@@ -181,10 +193,10 @@
           placeholder="예: 수인이 사는 해빙 행성. 외부인 입국 금지지만 암시장이 활발함."
         ></textarea>
 
-        <button id="submitBtn" type="button">시나리오 생성</button>
+        <button id="submitBtn" type="button">생성 요청</button>
         <div class="button-row">
           <button id="reviseBtn" class="ghost" type="button" disabled>수정 요청</button>
-          <button id="approveBtn" class="ghost" type="button" disabled>스토리 저장</button>
+          <button id="approveBtn" class="ghost" type="button" disabled>Markdown 저장</button>
         </div>
 
         <label for="revisionMessage">수정 요청 내용</label>
@@ -205,7 +217,16 @@
       </section>
 
       <section class="card story-preview">
-        <h2>저장된 시나리오 보기</h2>
+        <h2>저장된 문서 미리보기</h2>
+        <label for="previewScope">보기 범위</label>
+        <select id="previewScope">
+          <option value="stories">시나리오 (content/stories)</option>
+          <option value="planets">행성 (content/lore/planets)</option>
+          <option value="universe">우주 공통 (content/lore/universe)</option>
+          <option value="factions">세력 (content/lore/factions)</option>
+          <option value="characters">인물 (content/lore/characters)</option>
+          <option value="locations">장소·거점 (content/lore/locations)</option>
+        </select>
         <label for="storySelect">파일 선택</label>
         <div class="row">
           <select id="storySelect"></select>
@@ -233,6 +254,24 @@
       const loadStoryBtn = document.getElementById("loadStoryBtn");
       const storyPreviewEl = document.getElementById("storyPreview");
       const storyPreviewMetaEl = document.getElementById("storyPreviewMeta");
+      const previewScopeEl = document.getElementById("previewScope");
+      const loreSlotRowEl = document.getElementById("loreSlotRow");
+      const loreSlotEl = document.getElementById("loreSlot");
+      const LORE_PREVIEW_SCOPES = ["planets", "universe", "factions", "characters", "locations"];
+      function syncLoreSlotRowVisibility() {
+        loreSlotRowEl.style.display = docTypeEl.value === "lore" ? "block" : "none";
+      }
+
+      function emptyListLabel(scope) {
+        if (scope === "stories") return "(저장된 시나리오 없음)";
+        if (scope === "planets") return "(행성 문서 없음)";
+        if (scope === "universe") return "(우주 공통 문서 없음)";
+        if (scope === "factions") return "(세력 문서 없음)";
+        if (scope === "characters") return "(인물 문서 없음)";
+        if (scope === "locations") return "(장소 문서 없음)";
+        return "(문서 없음)";
+      }
+
       const STORAGE_KEYS = {
         currentDraftId: "projectS.currentDraftId"
       };
@@ -241,6 +280,15 @@
       function setResult(text, className) {
         resultEl.className = "result " + className;
         resultEl.textContent = text;
+        if (className === "ok" || className === "error") {
+          resultEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      }
+
+      function setActionState(hasDraft) {
+        const on = Boolean(hasDraft);
+        reviseBtn.disabled = !on;
+        approveBtn.disabled = !on;
       }
 
       function saveCurrentDraftId(draftId) {
@@ -265,14 +313,16 @@
         rewriteModeEnabledEl.checked = Boolean(enabled);
       }
 
-      function setDraftMetaText(draftId, expiresAt, editMode) {
+      function setDraftMetaText(draftId, expiresAt, editMode, loreSlot) {
         if (!draftId) {
           draftMetaEl.textContent = "";
           return;
         }
         const expiryLabel = expiresAt ? `만료 예정: ${new Date(expiresAt).toLocaleString()}` : "만료 예정: 알 수 없음";
         const modeLabel = editMode === "rewrite" ? "rewrite" : "preserve";
-        draftMetaEl.textContent = `현재 draftId: ${draftId} | 모드: ${modeLabel} | ${expiryLabel}`;
+        const lorePart =
+          docTypeEl.value === "lore" && loreSlot ? ` | lore: ${loreSlot}` : "";
+        draftMetaEl.textContent = `현재 draftId: ${draftId} | 모드: ${modeLabel}${lorePart} | ${expiryLabel}`;
       }
 
       function renderRevisionHistory(history) {
@@ -348,23 +398,32 @@
         }
       }
 
-      async function refreshStoryList() {
+      async function refreshPreviewList() {
         storySelectEl.innerHTML = "";
+        const scope = previewScopeEl.value;
+        const listUrl = scope === "stories" ? "/api/stories" : `/api/lore/${encodeURIComponent(scope)}`;
         try {
-          const response = await fetch("/api/stories");
+          const response = await fetch(listUrl);
           const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "목록 로드 실패");
           }
-          const stories = Array.isArray(data.stories) ? data.stories : [];
-          if (stories.length === 0) {
+          const items =
+            scope === "stories"
+              ? Array.isArray(data.stories)
+                ? data.stories
+                : []
+              : Array.isArray(data.items)
+                ? data.items
+                : [];
+          if (items.length === 0) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "(저장된 시나리오 없음)";
+            opt.textContent = emptyListLabel(scope);
             storySelectEl.appendChild(opt);
             return;
           }
-          for (const s of stories) {
+          for (const s of items) {
             const opt = document.createElement("option");
             opt.value = s.fileName;
             const label = `${s.sectionId} · ${s.fileName}`;
@@ -377,8 +436,9 @@
         }
       }
 
-      async function loadSelectedStory() {
+      async function loadSelectedPreview() {
         const fileName = storySelectEl.value;
+        const scope = previewScopeEl.value;
         if (!fileName) {
           storyPreviewMetaEl.textContent = "";
           storyPreviewEl.textContent = "선택된 파일이 없습니다.";
@@ -386,8 +446,12 @@
         }
         storyPreviewEl.textContent = "불러오는 중...";
         storyPreviewMetaEl.textContent = "";
+        const readUrl =
+          scope === "stories"
+            ? `/api/stories/${encodeURIComponent(fileName)}`
+            : `/api/lore/${encodeURIComponent(scope)}/${encodeURIComponent(fileName)}`;
         try {
-          const response = await fetch(`/api/stories/${encodeURIComponent(fileName)}`);
+          const response = await fetch(readUrl);
           const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "불러오기 실패");
@@ -411,18 +475,30 @@
         }
         try {
           const response = await fetch(`/api/chat/draft/${encodeURIComponent(savedDraftId)}`);
-          const data = await response.json();
+          const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "draft 복구 실패");
           }
           setCurrentDraftId(savedDraftId);
+          if (data.docType === "lore") {
+            docTypeEl.value = "lore";
+          } else if (data.docType === "scenario") {
+            docTypeEl.value = "scenario";
+          }
+          if (data.docType === "lore" && data.loreSlot && loreSlotEl.querySelector(`option[value="${data.loreSlot}"]`)) {
+            loreSlotEl.value = data.loreSlot;
+          } else if (data.docType === "lore") {
+            loreSlotEl.value = "auto";
+          }
+          syncLoreSlotRowVisibility();
           setRewriteModeEnabled(data.editMode === "rewrite");
-          setDraftMetaText(savedDraftId, data.expiresAt, data.editMode);
+          setDraftMetaText(savedDraftId, data.expiresAt, data.editMode, data.loreSlot);
           renderRevisionHistory(data.revisionHistory);
           setResult(
             [
               "저장된 draft를 복구했습니다.",
               `- draftId: ${savedDraftId}`,
+              data.docType === "lore" && data.loreSlot ? `- loreSlot: ${data.loreSlot}` : "",
               data.editMode ? `- editMode: ${data.editMode}` : "",
               data.expiresAt ? `- expiresAt: ${data.expiresAt}` : ""
             ]
@@ -450,18 +526,25 @@
         setResult("요청 처리 중...", "");
 
         try {
+          const body = { message, docType, editMode };
+          if (docType === "lore") {
+            body.loreSlot = loreSlotEl.value;
+          }
           const response = await fetch("/api/chat/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message, docType, editMode })
+            body: JSON.stringify(body)
           });
-          const data = await response.json();
+          const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "요청 실패");
           }
           setCurrentDraftId(data.draftId || null);
+          if (data.loreSlot && loreSlotEl.querySelector(`option[value="${data.loreSlot}"]`)) {
+            loreSlotEl.value = data.loreSlot;
+          }
           setRewriteModeEnabled(data.editMode === "rewrite");
-          setDraftMetaText(data.draftId, data.expiresAt, data.editMode);
+          setDraftMetaText(data.draftId, data.expiresAt, data.editMode, data.loreSlot);
           renderRevisionHistory(data.revisionHistory);
 
           const unavailableNote =
@@ -471,6 +554,8 @@
           const summary = [
             "생성 완료 (아직 Markdown 저장 전)",
             `- draftId: ${data.draftId}`,
+            `- docType: ${data.docType || docType}`,
+            data.loreSlot ? `- loreSlot: ${data.loreSlot}` : "",
             `- editMode: ${data.editMode || editMode}`,
             "",
             "내가 요청한 내용:",
@@ -525,16 +610,17 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ draftId: currentDraftId, revisionMessage, editMode })
           });
-          const data = await response.json();
+          const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "수정 요청 실패");
           }
           setRewriteModeEnabled(data.editMode === "rewrite");
-          setDraftMetaText(currentDraftId, data.expiresAt, data.editMode);
+          setDraftMetaText(currentDraftId, data.expiresAt, data.editMode, data.loreSlot);
           renderRevisionHistory(data.revisionHistory);
           const summary = [
             `수정 반영 완료 (revisionCount=${data.revisionCount})`,
             `- editMode: ${data.editMode || editMode}`,
+            data.loreSlot ? `- loreSlot: ${data.loreSlot}` : "",
             "",
             "내가 요청한 내용:",
             data.request?.originalMessage || "",
@@ -564,19 +650,21 @@
           return;
         }
         approveBtn.disabled = true;
-        setResult("스토리 저장 중...", "");
+        setResult("저장 중...", "");
         try {
           const response = await fetch("/api/chat/approve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ draftId: currentDraftId })
           });
-          const data = await response.json();
+          const data = await readJsonBody(response);
           if (!response.ok) {
             throw new Error(data.error || "저장 실패");
           }
           const summary = [
-            "저장 완료: 시나리오 파일 반영됨",
+            "저장 완료 (Markdown 반영)",
+            `- docType: ${data.docType || "scenario"}`,
+            data.loreSlot ? `- loreSlot: ${data.loreSlot}` : "",
             `- storagePath: ${data.storagePath}`,
             `- applyKey: ${data.applyKey}`,
             "",
@@ -585,10 +673,15 @@
           ].join("\n");
           setResult(summary, "ok");
           const savedName = storyFileNameFromStoragePath(data.storagePath);
-          await refreshStoryList();
+          if (data.docType === "lore" && data.loreSlot && LORE_PREVIEW_SCOPES.includes(data.loreSlot)) {
+            previewScopeEl.value = data.loreSlot;
+          } else {
+            previewScopeEl.value = "stories";
+          }
+          await refreshPreviewList();
           if (savedName) {
             storySelectEl.value = savedName;
-            await loadSelectedStory();
+            await loadSelectedPreview();
           }
           setCurrentDraftId(null);
           setDraftMetaText(null, null, null);
@@ -606,14 +699,18 @@
         }
       });
 
-      refreshStoriesBtn.addEventListener("click", () => refreshStoryList());
-      loadStoryBtn.addEventListener("click", () => loadSelectedStory());
+      docTypeEl.addEventListener("change", () => syncLoreSlotRowVisibility());
+
+      previewScopeEl.addEventListener("change", () => refreshPreviewList());
+      refreshStoriesBtn.addEventListener("click", () => refreshPreviewList());
+      loadStoryBtn.addEventListener("click", () => loadSelectedPreview());
 
       setRewriteModeEnabled(false);
       setActionState(false);
       renderRevisionHistory([]);
+      syncLoreSlotRowVisibility();
       restoreDraftFromStorage();
-      refreshStoryList();
+      refreshPreviewList();
     </script>
   </body>
 </html>

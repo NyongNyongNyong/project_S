@@ -3,7 +3,19 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { env } from "./config";
 import { generateSuggestion, reviseScenarioConservatively } from "./ai";
-import { listStories, readStory, saveScenarioStory } from "./storage";
+import {
+  allocateNextLoreSectionId,
+  allocateNextScenarioSectionId,
+  isLoreSlot,
+  listLoreDocs,
+  listStories,
+  LORE_SLOTS,
+  readLoreDoc,
+  readStory,
+  saveLoreDoc,
+  saveScenarioStory,
+  type LoreSlot
+} from "./storage";
 import { DraftInput, EditMode, ScenarioCategory } from "./types";
 
 const app = express();
@@ -23,10 +35,12 @@ interface PendingChatDraft {
   revisionHistory: RevisionEntry[];
   createdAt: number;
   updatedAt: number;
+  docType: "lore" | "scenario";
+  /** 시나리오일 때는 null */
+  loreSlot: LoreSlot | null;
 }
 
 const versionBySection = new Map<string, number>();
-const autoSectionBySeries = new Map<string, number>();
 const pendingChatDrafts = new Map<string, PendingChatDraft>();
 const CATEGORY_SET: Set<ScenarioCategory> = new Set([
   "plot",
@@ -48,6 +62,84 @@ function resolveEditMode(value: unknown): EditMode {
 
 function hasRewriteTag(text: unknown): boolean {
   return typeof text === "string" && /(^|\s)#rewrite(\s|$)/i.test(text);
+}
+
+function resolveChatDocType(input: unknown): "lore" | "scenario" {
+  if (typeof input !== "object" || input === null) {
+    return "scenario";
+  }
+  const raw = (input as { docType?: string }).docType;
+  if (typeof raw === "string" && raw.trim().toLowerCase() === "lore") {
+    return "lore";
+  }
+  return "scenario";
+}
+
+function inferLoreSlotFromMessage(message: string): LoreSlot {
+  const t = message.toLowerCase();
+  if (
+    /세력|팩션|조직|연합|길드|군단|제국|기업\s*연합|카르텔|faction|syndicate|cartel|guild|corporation|empire|megacorp/.test(
+      message
+    )
+  ) {
+    return "factions";
+  }
+  if (/인물|캐릭터|npc|주인공|조연|character|protagonist|antagonist/.test(message)) {
+    return "characters";
+  }
+  if (/정거장|거점|기지|식민지|궤도\s*도시|도시\s*국가|station|habitat|outpost|colony|spaceport|arcology/.test(message)) {
+    return "locations";
+  }
+  if (/행성|대기|자전|위성|중력|생태|지형|planet|moon|orbit|tidal/.test(message)) {
+    return "planets";
+  }
+  if (/은하|공동체|ftl|워프|타임라인|우주\s*법|세계관\s*공통|galactic|cosmology|timeline|diaspora/.test(message)) {
+    return "universe";
+  }
+  if (
+    /세계관|설정|lore|worldbuilding/.test(t) &&
+    !/장면|대사|시나리오|씬|scene|dialogue|plot/.test(message)
+  ) {
+    return "universe";
+  }
+  return "planets";
+}
+
+function parseExplicitLoreSlot(body: unknown): LoreSlot | "auto" | undefined {
+  if (typeof body !== "object" || body === null) {
+    return undefined;
+  }
+  const raw = (body as { loreSlot?: string }).loreSlot;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const s = raw.trim().toLowerCase();
+  if (s === "auto" || s === "") {
+    return "auto";
+  }
+  if (isLoreSlot(s)) {
+    return s;
+  }
+  return undefined;
+}
+
+function resolveLoreSlotFromRequest(body: unknown): LoreSlot {
+  const explicit = parseExplicitLoreSlot(body);
+  if (explicit && explicit !== "auto") {
+    return explicit;
+  }
+  const message =
+    typeof body === "object" && body !== null && typeof (body as { message?: string }).message === "string"
+      ? (body as { message: string }).message
+      : "";
+  return inferLoreSlotFromMessage(message);
+}
+
+function scenarioCategoryForLoreSlot(slot: LoreSlot): ScenarioCategory {
+  if (slot === "characters") {
+    return "character";
+  }
+  return "worldbuilding";
 }
 
 function getDraftExpiryTimestamp(entry: PendingChatDraft): number {
@@ -72,13 +164,6 @@ function getPendingChatDraftOrThrow(draftId: string): PendingChatDraft {
     throw new Error("draft not found or expired");
   }
   return entry;
-}
-
-function nextAutoSectionId(seriesLabel: string): string {
-  const current = autoSectionBySeries.get(seriesLabel) ?? 0;
-  const next = current + 1;
-  autoSectionBySeries.set(seriesLabel, next);
-  return `${seriesLabel} ${next}`;
 }
 
 function validateDraftInput(input: unknown): DraftInput {
@@ -119,7 +204,10 @@ function validateDraftInput(input: unknown): DraftInput {
   };
 }
 
-function validateChatReviseInput(input: unknown): DraftInput {
+function validateChatReviseInput(
+  input: unknown,
+  opts: { docType: "lore" | "scenario"; loreSlot: LoreSlot | null }
+): DraftInput {
   if (typeof input !== "object" || input === null) {
     throw new Error("request body must be an object");
   }
@@ -142,13 +230,10 @@ function validateChatReviseInput(input: unknown): DraftInput {
     : "review";
 
   let category: ScenarioCategory | undefined;
-  if (typeof body.docType === "string" && body.docType.trim().length > 0) {
-    const docType = body.docType.trim().toLowerCase();
-    if (docType === "lore") {
-      category = "worldbuilding";
-    } else if (docType === "scenario") {
-      category = "plot";
-    }
+  if (opts.docType === "lore") {
+    category = opts.loreSlot ? scenarioCategoryForLoreSlot(opts.loreSlot) : "worldbuilding";
+  } else {
+    category = "plot";
   }
 
   if (typeof body.category === "string" && body.category.trim().length > 0) {
@@ -162,11 +247,11 @@ function validateChatReviseInput(input: unknown): DraftInput {
   const sectionId =
     typeof body.sectionId === "string" && body.sectionId.trim().length > 0
       ? body.sectionId.trim()
-      : category === "plot"
-        ? nextAutoSectionId("시나리오")
-        : category === "worldbuilding"
-          ? nextAutoSectionId("planet")
-          : nextAutoSectionId("item");
+      : (() => {
+          throw new Error(
+            "sectionId가 비어 있습니다. 채팅 생성 경로에서는 서버가 디스크 기준으로 번호를 붙여야 합니다."
+          );
+        })();
 
   return {
     chapterId,
@@ -192,6 +277,8 @@ app.get("/", (_req, res) => {
       chatSave: "POST /api/chat/approve",
       listStories: "GET /api/stories",
       readStory: "GET /api/stories/:fileName",
+      listLore: "GET /api/lore/:slot",
+      readLore: "GET /api/lore/:slot/:fileName",
       createScenarioRevision: "POST /api/scenario/revise"
     }
   });
@@ -231,6 +318,50 @@ app.get("/api/stories/:fileName", async (req, res) => {
       res.status(404).json({ error: "story not found" });
       return;
     }
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/lore/:slot/:fileName", async (req, res) => {
+  try {
+    const slot = req.params?.slot;
+    if (!slot || !isLoreSlot(slot)) {
+      res.status(400).json({ error: `slot must be one of: ${LORE_SLOTS.join(", ")}` });
+      return;
+    }
+    const fileName = req.params?.fileName;
+    if (!fileName) {
+      res.status(400).json({ error: "fileName is required" });
+      return;
+    }
+    const { summary, body } = await readLoreDoc(slot, fileName);
+    res.json({ summary, body });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    if (message === "invalid story file name") {
+      res.status(400).json({ error: message });
+      return;
+    }
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      res.status(404).json({ error: "lore document not found" });
+      return;
+    }
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get("/api/lore/:slot", async (req, res) => {
+  try {
+    const slot = req.params?.slot;
+    if (!slot || !isLoreSlot(slot)) {
+      res.status(400).json({ error: `slot must be one of: ${LORE_SLOTS.join(", ")}` });
+      return;
+    }
+    const items = await listLoreDocs(slot);
+    res.json({ slot, items });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
     res.status(500).json({ error: message });
   }
 });
@@ -302,7 +433,23 @@ app.post("/api/scenario/revise", async (req, res) => {
 app.post("/api/chat/generate", async (req, res) => {
   try {
     pruneExpiredChatDrafts();
-    const draft = validateChatReviseInput(req.body);
+    const docType = resolveChatDocType(req.body);
+    const loreSlot = docType === "lore" ? resolveLoreSlotFromRequest(req.body) : null;
+
+    const body =
+      typeof req.body === "object" && req.body !== null ? (req.body as Record<string, unknown>) : {};
+    const rawSection = typeof body.sectionId === "string" ? body.sectionId.trim() : "";
+
+    let generateBody: unknown = req.body;
+    if (!rawSection) {
+      const allocated =
+        docType === "scenario"
+          ? await allocateNextScenarioSectionId()
+          : await allocateNextLoreSectionId(loreSlot ?? "planets");
+      generateBody = { ...body, sectionId: allocated };
+    }
+
+    const draft = validateChatReviseInput(generateBody, { docType, loreSlot });
     const review = await generateSuggestion(draft);
     const editMode = hasRewriteTag(req.body?.message) ? "rewrite" : resolveEditMode(req.body?.editMode);
     const draftId = randomUUID();
@@ -314,7 +461,9 @@ app.post("/api/chat/generate", async (req, res) => {
       revisionCount: 0,
       revisionHistory: [],
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      docType,
+      loreSlot
     });
     const expiresAt = new Date(now + env.CHAT_DRAFT_TTL_MS).toISOString();
 
@@ -323,9 +472,12 @@ app.post("/api/chat/generate", async (req, res) => {
       draftId,
       expiresAt,
       editMode,
+      docType,
+      loreSlot,
       request: {
         originalMessage: draft.draftText,
-        docType: req.body?.docType ?? null
+        docType: docType === "lore" ? "lore" : "scenario",
+        loreSlot: loreSlot ?? undefined
       },
       category: draft.category ?? "other",
       input: {
@@ -367,6 +519,8 @@ app.get("/api/chat/draft/:draftId", async (req, res) => {
       expiresAt,
       editMode: pending.editMode,
       revisionCount: pending.revisionCount,
+      docType: pending.docType,
+      loreSlot: pending.loreSlot ?? undefined,
       request: {
         originalMessage: pending.draft.draftText
       },
@@ -440,6 +594,7 @@ app.post("/api/chat/revise-draft", async (req, res) => {
     const revisionHistory = [...pending.revisionHistory, { message: revisionMessage, createdAt: new Date().toISOString() }]
       .slice(-CHAT_REVISION_HISTORY_LIMIT);
     const updatedAt = Date.now();
+    const docType = pending.docType;
     pendingChatDrafts.set(body.draftId, {
       draft: revisedDraft,
       review,
@@ -447,7 +602,9 @@ app.post("/api/chat/revise-draft", async (req, res) => {
       revisionCount,
       revisionHistory,
       createdAt: pending.createdAt,
-      updatedAt
+      updatedAt,
+      docType,
+      loreSlot: pending.loreSlot
     });
     const expiresAt = new Date(updatedAt + env.CHAT_DRAFT_TTL_MS).toISOString();
 
@@ -457,9 +614,12 @@ app.post("/api/chat/revise-draft", async (req, res) => {
       editMode: activeEditMode,
       revisionCount,
       expiresAt,
+      docType,
+      loreSlot: pending.loreSlot ?? undefined,
       request: {
         originalMessage: originalMessageForResponse,
-        docType: req.body?.docType ?? null
+        docType: docType === "lore" ? "lore" : "scenario",
+        loreSlot: pending.loreSlot ?? undefined
       },
       reviewerResults: review.reviewerResults,
       revisionHistory,
@@ -493,18 +653,24 @@ app.post("/api/chat/approve", async (req, res) => {
     const version = (versionBySection.get(sectionKey) ?? 0) + 1;
     versionBySection.set(sectionKey, version);
     const applyKey = `${pending.draft.chapterId}:${pending.draft.sectionId}:v${version}`;
-    const saved = await saveScenarioStory({
+    const saveArgs = {
       chapterId: pending.draft.chapterId,
       sectionId: pending.draft.sectionId,
       storyText: pending.review.finalText,
       applyKey
-    });
+    };
+    const saved =
+      pending.docType === "lore" && pending.loreSlot
+        ? await saveLoreDoc(pending.loreSlot, saveArgs)
+        : await saveScenarioStory(saveArgs);
     pendingChatDrafts.delete(body.draftId);
 
     res.status(201).json({
       mode: "chat",
       draftId: body.draftId,
       status: "saved",
+      docType: pending.docType,
+      loreSlot: pending.loreSlot ?? undefined,
       storagePath: saved.filePath,
       applyKey,
       mergedReview: {

@@ -14,7 +14,8 @@
     "storage:verify": "tsx src/scripts/verifyNotion.ts",
     "storage:bootstrap": "tsx src/scripts/bootstrapNotion.ts",
     "notion:verify": "tsx src/scripts/verifyNotion.ts",
-    "notion:bootstrap": "tsx src/scripts/bootstrapNotion.ts"
+    "notion:bootstrap": "tsx src/scripts/bootstrapNotion.ts",
+    "story:rewrite": "tsx src/scripts/rewriteStoryMarkdown.ts"
   },
   "keywords": [],
   "author": "",

@@ -300,7 +300,7 @@ function buildConservativeRevisionPrompt(args: {
   ].join("\n");
 }
 
-async function rewriteMergedScenario(input: DraftInput, finalDraft: string): Promise<string | null> {
+export async function rewriteMergedScenario(input: DraftInput, finalDraft: string): Promise<string | null> {
   if (!env.CURSOR_ENABLE_REWRITE) {
     return null;
   }
@@ -313,15 +313,17 @@ async function rewriteMergedScenario(input: DraftInput, finalDraft: string): Pro
     "영어 번역투, 직역체, 어색한 피동/관념 표현을 금지한다.",
     "중요 규칙:",
     "1) 번호 목록을 절대 쓰지 않는다.",
-    "2) 4~6개 단락으로 작성하고, 단락 사이에는 빈 줄 하나를 둔다.",
-    "3) 각 단락은 자연스러운 서술 문장 2~4개로 구성한다.",
+    "2) 단락 사이에는 빈 줄 하나를 둔다. 단락 개수는 입력 분량에 맞게 자유롭다(짧게 압축하지 않는다).",
+    "3) 각 단락은 자연스러운 서술 문장 여러 개로 구성한다.",
     "4) 대사는 필요한 장면에만 넣고, 대사 줄은 앞뒤를 줄바꿈으로 분리한다.",
     "5) 대사 형식은 `주인공: \"...\"` / `상선 함장: \"...\"`만 사용한다.",
     "6) 설명문 과다 금지, 지나치게 건조한 보고체도 금지",
-    "7) 입력의 핵심 사건(먼 은하 표류, 자원 고갈, 상선 조우, 보급, 행성으로 출발)을 유지",
+    "7) 리라이트 대상 본문의 사건 순서·인과·핵심 반전을 유지한다.",
     "8) '(이름/호출부호)' 같은 플레이스홀더, 슬래시 표기, 괄호 메타 문구를 금지",
     "9) 다음 번역투를 금지: '턱을 잠그다', '조건을 맞추다', '입을 잘 다스리다', '항구에 선다'",
-    "10) 코드블록/머리말/해설 없이 시나리오 본문만 출력",
+    "10) 머리말/해설 없이 시나리오 본문만 출력한다. 입력에 삼중 백틱(```)으로 둘러싼 로그·기록 블록이 있으면 블록 안 줄은 바꾸지 말고 블록 전체를 그대로 유지한다.",
+    "11) 입력 본문의 모든 장면을 유지한다. 일부만 발췌하거나 뒷부분을 생략하지 않는다.",
+    "12) 출력 분량은 입력과 비슷한 길이를 유지한다. 요약으로 짧게 줄이지 않는다.",
     "",
     "[유저 원본 입력]",
     truncateText(input.draftText, 1500),

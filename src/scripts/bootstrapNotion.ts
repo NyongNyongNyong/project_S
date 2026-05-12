@@ -6,6 +6,12 @@ async function main() {
 
   console.log("Markdown storage bootstrap completed.");
   console.log(`storiesDir: ${verifyInfo.storiesDir}`);
+  console.log(`lorePlanetsDir: ${verifyInfo.lorePlanetsDir}`);
+  console.log(
+    `loreDirs: ${Object.entries(verifyInfo.loreDirs)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ")}`
+  );
   if (result.changedProperties.length === 0) {
     console.log("No storage changes were needed.");
   } else {

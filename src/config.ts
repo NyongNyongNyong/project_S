@@ -10,6 +10,8 @@ const EnvSchema = z.object({
   CURSOR_BRIDGE_AUTH_TOKEN: z.string().optional(),
   STORAGE_ROOT_DIR: z.string().default("content"),
   STORAGE_STORIES_DIR: z.string().default("stories"),
+  /** Planet / 세계관 카드 등 모바일 lore 승인본 저장 위치 (STORAGE_ROOT_DIR 기준 하위 경로) */
+  STORAGE_LORE_PLANETS_DIR: z.string().default("lore/planets"),
   CURSOR_IDEATION_MODEL: z.string().default("auto"),
   CURSOR_STRUCTURING_MODEL: z.string().default("auto"),
   CURSOR_CONFLICT_MODEL: z.string().default("gemini-3.1-pro"),
