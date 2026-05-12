@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.server.pid
+server.log
+dev.log
+.DS_Store
+content/.obsidian/
